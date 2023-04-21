@@ -1,11 +1,10 @@
 import spacy
 from spacytextblob.spacytextblob import SpacyTextBlob
 import json
-from model import process_comments, map_entities_to_tree
-import transformers
-from transformers import GPT2Tokenizer
-transformers.logging.set_verbosity_error() 
-
+from model import process_comments, map_entities_to_tree 
+from util import generate_chunks_from_list
+from open_ai import init_open_ai_service
+import asyncio
 
 # Load English large model
 roberta_nlp = spacy.load("en_core_web_trf")
@@ -17,12 +16,6 @@ commentsJSON = None
 # read in json data for model input
 with open("threadComments.json", "rb") as f:
     commentsJSON = json.load(f)
-
-def get_tokens_length_from_entities(entities_tree):
-    entities_tree_keys_string = ', '.join(entities_tree.keys())
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    entities_tree_keys_tokens = tokenizer.encode(entities_tree_keys_string)
-    return len(entities_tree_keys_tokens)
     
 def init_model(commentsJSON):
     entities_tree = {}
@@ -47,13 +40,20 @@ def init_model(commentsJSON):
 
         # mutate comments list from comment thread dict and add comments with entities
         commentData['comments'] = comments_with_entities
-    # get token amount to help chunk api calls to open ai for further processing 
-    get_tokens_length_from_entities(entities_tree)
-    return [commentsJSON, entities_tree]         
 
-# store output and seralize for writing json file
-comment_threads, entities_tree = init_model(commentsJSON)
-entities_tree_json = json.dumps(entities_tree, indent=4)
+    # chunk input for openAI
+    # wrap keys() in list to allow for numerical index reference
+    entity_chunks = generate_chunks_from_list(list(entities_tree.keys()), 10, 2)
+    return [commentsJSON, entities_tree, entity_chunks]         
 
-with open("entities_tree.json", "w") as outfile:
-    outfile.write(entities_tree_json)
+
+async def main():
+    # store output and seralize for writing json file
+    comment_threads, entities_tree, entity_chunks = init_model(commentsJSON)
+    # run open ai service to classify model entities for category relevancy
+    classified_entities_tree = await init_open_ai_service(entity_chunks, 'credit card', entities_tree)
+    entities_tree_json = json.dumps(classified_entities_tree, indent=4)
+    with open("entities_tree.json", "w") as outfile:
+        outfile.write(entities_tree_json)
+
+asyncio.run(main())
